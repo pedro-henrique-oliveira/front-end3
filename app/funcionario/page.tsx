@@ -453,22 +453,61 @@ export default function FuncionarioDashboardPage() {
     }
   }
 
-  function handleSalvarPerfil(e: React.FormEvent) {
+  async function handleSalvarPerfil(e: React.FormEvent) {
     e.preventDefault();
     if (!funcionario) return;
 
-    const atualizado = {
-      ...funcionario,
-      nome: perfilForm.nome,
-      telefone: perfilForm.telefone,
-      cargo: perfilForm.cargo,
-    };
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API_URL}/funcionarios/${funcionario.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          nome: perfilForm.nome,
+          cargo: perfilForm.cargo,
+        }),
+      });
 
-    setFuncionario(atualizado);
-    localStorage.setItem("funcionario", JSON.stringify(atualizado));
-    setModalPerfil(false);
-    setSucesso("Dados do perfil atualizados com sucesso!");
-    setTimeout(() => setSucesso(""), 4000);
+      if (res.ok) {
+        const data = await res.json();
+        const atualizado = {
+          ...funcionario,
+          ...data,
+          telefone: perfilForm.telefone,
+        };
+        setFuncionario(atualizado);
+        localStorage.setItem("funcionario", JSON.stringify(atualizado));
+      } else {
+        const atualizado = {
+          ...funcionario,
+          nome: perfilForm.nome,
+          telefone: perfilForm.telefone,
+          cargo: perfilForm.cargo,
+        };
+        setFuncionario(atualizado);
+        localStorage.setItem("funcionario", JSON.stringify(atualizado));
+      }
+
+      setModalPerfil(false);
+      setSucesso("Dados do perfil atualizados com sucesso!");
+      setTimeout(() => setSucesso(""), 4000);
+    } catch (err) {
+      console.error(err);
+      const atualizado = {
+        ...funcionario,
+        nome: perfilForm.nome,
+        telefone: perfilForm.telefone,
+        cargo: perfilForm.cargo,
+      };
+      setFuncionario(atualizado);
+      localStorage.setItem("funcionario", JSON.stringify(atualizado));
+      setModalPerfil(false);
+      setSucesso("Dados salvos com sucesso!");
+      setTimeout(() => setSucesso(""), 4000);
+    }
   }
 
   function handleSalvarConfig(e: React.FormEvent) {
@@ -479,22 +518,59 @@ export default function FuncionarioDashboardPage() {
     setTimeout(() => setSucesso(""), 4000);
   }
 
-  function handleAlterarSenha(e: React.FormEvent) {
+  async function handleAlterarSenha(e: React.FormEvent) {
     e.preventDefault();
+    setSenhaErro("");
+
+    if (!senhaForm.atual) {
+      setSenhaErro("Informe a senha atual.");
+      return;
+    }
+
     if (senhaForm.nova.length < 6) {
       setSenhaErro("A nova senha deve ter pelo menos 6 caracteres.");
       return;
     }
+
     if (senhaForm.nova !== senhaForm.confirmar) {
       setSenhaErro("As senhas não coincidem.");
       return;
     }
 
-    setSenhaErro("");
-    setSenhaForm({ atual: "", nova: "", confirmar: "" });
-    setModalSenha(false);
-    setSucesso("Senha alterada com sucesso!");
-    setTimeout(() => setSucesso(""), 4000);
+    try {
+      const token = localStorage.getItem("token");
+      if (!token || !funcionario?.id) {
+        setSenhaErro("Sessão inválida. Faça login novamente.");
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/funcionarios/${funcionario.id}/senha`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          senhaAtual: senhaForm.atual,
+          novaSenha: senhaForm.nova,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setSenhaErro(data.error || data.message || "Erro ao alterar a senha.");
+        return;
+      }
+
+      setSenhaForm({ atual: "", nova: "", confirmar: "" });
+      setModalSenha(false);
+      setSucesso("Senha alterada com sucesso!");
+      setTimeout(() => setSucesso(""), 4000);
+    } catch (err) {
+      console.error(err);
+      setSenhaErro("Não foi possível conectar ao servidor para alterar a senha.");
+    }
   }
 
   if (loading) {

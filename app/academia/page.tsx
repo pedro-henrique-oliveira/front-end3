@@ -82,6 +82,18 @@ interface Receita {
   createdAt?: string;
 }
 
+interface Despesa {
+  id: number;
+  descricao?: string;
+  valor?: string | number;
+  categoria?: string;
+  dataVencimento?: string;
+  dataPagamento?: string;
+  status?: string;
+  updatedAt?: string;
+  createdAt?: string;
+}
+
 interface Configuracao {
   unidade: string;
   endereco: string;
@@ -140,10 +152,6 @@ function formatarMoeda(valor?: string | number) {
     currency: "BRL",
   });
 }
-
-/* =========================
-   CORREÇÃO DO TOOLTIP
-========================= */
 
 function formatarTooltip(value: unknown) {
   if (typeof value === "number" || typeof value === "string") {
@@ -397,6 +405,7 @@ export default function AdminDashboardPage() {
   const [alunos, setAlunos] = useState<Aluno[]>([]);
   const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
   const [receitas, setReceitas] = useState<Receita[]>([]);
+  const [despesas, setDespesas] = useState<Despesa[]>([]);
   const [isAdm, setIsAdm] = useState<boolean>(true);
 
   const [loading, setLoading] = useState(true);
@@ -439,7 +448,6 @@ export default function AdminDashboardPage() {
   ========================= */
 
   useEffect(() => {
-    // Detecta se o usuário logado é Admin ou Funcionário comum
     const funcStorage = localStorage.getItem("funcionario");
     if (funcStorage) {
       try {
@@ -484,33 +492,37 @@ export default function AdminDashboardPage() {
         Authorization: `Bearer ${token}`,
       };
 
-      const [resAlunos, resFuncionarios, resReceitas] = await Promise.all([
+      const [resAlunos, resFuncionarios, resReceitas, resDespesas] = await Promise.all([
         fetch(`${API_URL}/alunos`, { headers, cache: "no-store" }),
         fetch(`${API_URL}/funcionarios`, { headers, cache: "no-store" }),
         fetch(`${API_URL}/receitas`, { headers, cache: "no-store" }),
+        fetch(`${API_URL}/despesas`, { headers, cache: "no-store" }),
       ]);
 
       if (
         resAlunos.status === 401 ||
         resFuncionarios.status === 401 ||
-        resReceitas.status === 401
+        resReceitas.status === 401 ||
+        resDespesas.status === 401
       ) {
         localStorage.removeItem("token");
         window.location.href = "/login";
         return;
       }
 
-      if (!resAlunos.ok || !resFuncionarios.ok || !resReceitas.ok) {
+      if (!resAlunos.ok || !resFuncionarios.ok || !resReceitas.ok || !resDespesas.ok) {
         throw new Error("Erro ao carregar dados da API");
       }
 
       const dataAlunos = await resAlunos.json();
       const dataFuncionarios = await resFuncionarios.json();
       const dataReceitas = await resReceitas.json();
+      const dataDespesas = resDespesas.ok ? await resDespesas.json() : { data: [] };
 
       setAlunos(normalizarLista<Aluno>(dataAlunos));
       setFuncionarios(normalizarLista<Funcionario>(dataFuncionarios));
       setReceitas(normalizarLista<Receita>(dataReceitas));
+      setDespesas(normalizarLista<Despesa>(dataDespesas));
     } catch (err) {
       setErro(
         err instanceof Error
@@ -546,13 +558,12 @@ export default function AdminDashboardPage() {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
 
-      // Gerar campos obrigatórios para o backend funcionar corretamente
       const payload = {
         nome: novoFuncionario.nome,
         cargo: novoFuncionario.cargo,
         turno: novoFuncionario.turno,
         email: `${novoFuncionario.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ".")}@gymflow.com`,
-        senha: "123456", // Senha padrão para novos colaboradores
+        senha: "123456",
         idade: 30,
         dataNascimento: "1995-01-01T00:00:00.000Z",
         cpf: `${Math.floor(100 + Math.random() * 900)}.${Math.floor(100 + Math.random() * 900)}.${Math.floor(100 + Math.random() * 900)}-${Math.floor(10 + Math.random() * 90)}`,
@@ -729,6 +740,46 @@ export default function AdminDashboardPage() {
   }
 
   /* =========================
+     DESPESAS
+  ========================= */
+
+  async function marcarDespesaComoPaga(despesa: Despesa) {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(
+        `${API_URL}/despesas/${despesa.id}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            descricao: despesa.descricao,
+            valor: despesa.valor,
+            categoria: despesa.categoria,
+            dataVencimento: despesa.dataVencimento || new Date().toISOString(),
+            dataPagamento: new Date().toISOString(),
+            status: "Pago",
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error("Erro ao atualizar despesa");
+      }
+
+      carregarDados();
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Erro ao atualizar"
+      );
+    }
+  }
+
+  /* =========================
      FILTROS
   ========================= */
 
@@ -757,7 +808,7 @@ export default function AdminDashboardPage() {
   }, [funcionarios, searchFuncionarios]);
 
   /* =========================
-     GRÁFICOS
+     GRÁFICOS & CÁLCULOS
   ========================= */
 
   const receitaPorPlano = useMemo(() => {
@@ -837,6 +888,14 @@ export default function AdminDashboardPage() {
     );
   }, [receitas]);
 
+  const totalDespesa = useMemo(() => {
+    return despesas.reduce(
+      (sum, d) =>
+        sum + numero(d.valor),
+      0
+    );
+  }, [despesas]);
+
   const receitasPendentes = useMemo(() => {
     return receitas.filter(
       (r) =>
@@ -846,6 +905,45 @@ export default function AdminDashboardPage() {
           "atrasado"
     ).length;
   }, [receitas]);
+
+  const despesasPendentes = useMemo(() => {
+    return despesas.filter(
+      (d) =>
+        d.status?.toLowerCase() ===
+          "pendente" ||
+        d.status?.toLowerCase() ===
+          "atrasado"
+    ).length;
+  }, [despesas]);
+
+  const lucroLiquido = useMemo(() => {
+    return totalReceita - totalDespesa;
+  }, [totalReceita, totalDespesa]);
+
+  const despesaPorCategoria = useMemo(() => {
+    const agrupar = despesas.reduce(
+      (acc, despesa) => {
+        const cat = despesa.categoria || "Outros";
+        const existente = acc.find(
+          (d) => d.categoria === cat
+        );
+
+        if (existente) {
+          existente.valor += numero(despesa.valor);
+        } else {
+          acc.push({
+            categoria: cat,
+            valor: numero(despesa.valor),
+          });
+        }
+
+        return acc;
+      },
+      [] as { categoria: string; valor: number }[]
+    );
+
+    return agrupar.sort((a, b) => b.valor - a.valor);
+  }, [despesas]);
 
   const taxaOcupacao = useMemo(() => {
     return configForm.capacidadeMaxima
@@ -944,6 +1042,15 @@ export default function AdminDashboardPage() {
             />
           )}
 
+          {despesasPendentes > 0 && (
+            <AlertCard
+              icon={AlertTriangle}
+              title="Despesas a pagar"
+              description={`${despesasPendentes} despesa(s) vencida(s) ou pendente(s)`}
+              type="warning"
+            />
+          )}
+
           {taxaOcupacao > 90 && (
             <AlertCard
               icon={Activity}
@@ -968,7 +1075,7 @@ export default function AdminDashboardPage() {
 
             {/* STATS */}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <StatCard
                 icon={Users}
                 label="Alunos ativos"
@@ -1006,6 +1113,16 @@ export default function AdminDashboardPage() {
                 )}
                 variacao={`Pendente: ${receitasPendentes}`}
                 trend="up"
+              />
+
+              <StatCard
+                icon={AlertTriangle}
+                label="Despesa total"
+                valor={formatarMoeda(
+                  totalDespesa
+                )}
+                variacao={`Pendente: ${despesasPendentes}`}
+                trend="down"
               />
 
               <StatCard
@@ -1131,65 +1248,91 @@ export default function AdminDashboardPage() {
                 )}
               </SectionCard>
 
-              {/* RESUMO */}
+              {/* DESPESAS POR CATEGORIA */}
 
               <SectionCard
-                icon={CheckCircle}
-                title="Resumo do mês"
+                icon={AlertTriangle}
+                title="Despesas por categoria"
                 fullWidth={false}
               >
-                <div className="space-y-3">
+                {despesaPorCategoria.length > 0 ? (
+                  <ResponsiveContainer
+                    width="100%"
+                    height={250}
+                  >
+                    <BarChart
+                      data={despesaPorCategoria}
+                      layout="vertical"
+                    >
+                      <XAxis type="number" stroke="#71717a" style={{ fontSize: "12px" }} />
+                      <YAxis
+                        dataKey="categoria"
+                        type="category"
+                        stroke="#71717a"
+                        style={{ fontSize: "12px" }}
+                        width={80}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#18181b",
+                          border: "1px solid #27272a",
+                        }}
+                        formatter={(value) =>
+                          formatarTooltip(value)
+                        }
+                      />
+                      <Bar
+                        dataKey="valor"
+                        fill="#f59e0b"
+                        radius={[0, 8, 8, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-sm text-zinc-500">
+                    Sem dados
+                  </p>
+                )}
+              </SectionCard>
+            </div>
 
-                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
-                    <span className="text-sm text-zinc-400">
-                      Novos alunos
-                    </span>
+            {/* RESUMO FINANCEIRO */}
 
-                    <span className="text-lg font-bold text-emerald-400">
-                      +
-                      {Math.floor(
-                        alunos.length * 0.2
-                      )}
-                    </span>
-                  </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+              <SectionCard
+                icon={CheckCircle}
+                title="Receita Total"
+                fullWidth={false}
+              >
+                <p className="text-3xl font-bold text-emerald-400">
+                  {formatarMoeda(totalReceita)}
+                </p>
+              </SectionCard>
 
-                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
-                    <span className="text-sm text-zinc-400">
-                      Cancelamentos
-                    </span>
+              <SectionCard
+                icon={AlertTriangle}
+                title="Despesa Total"
+                fullWidth={false}
+              >
+                <p className="text-3xl font-bold text-red-400">
+                  {formatarMoeda(totalDespesa)}
+                </p>
+              </SectionCard>
 
-                    <span className="text-lg font-bold text-red-400">
-                      -2
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
-                    <span className="text-sm text-zinc-400">
-                      Taxa conversão
-                    </span>
-
-                    <span className="text-lg font-bold text-blue-400">
-                      87%
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
-                    <span className="text-sm text-zinc-400">
-                      Satisfação
-                    </span>
-
-                    <span className="text-lg font-bold text-amber-400">
-                      4.8/5
-                    </span>
-                  </div>
-
-                </div>
+              <SectionCard
+                icon={DollarSign}
+                title="Lucro Líquido"
+                fullWidth={false}
+              >
+                <p className={`text-3xl font-bold ${lucroLiquido >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatarMoeda(lucroLiquido)}
+                </p>
               </SectionCard>
             </div>
 
             {/* TABELAS */}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
 
               {/* ALUNOS */}
 
@@ -1339,7 +1482,7 @@ export default function AdminDashboardPage() {
 
             {/* RECEITAS */}
 
-            <div className="mt-6">
+            <div className="mb-6">
               <SectionCard
                 icon={Wallet}
                 title="Últimas receitas"
@@ -1414,9 +1557,90 @@ export default function AdminDashboardPage() {
               </SectionCard>
             </div>
 
+            {/* DESPESAS */}
+
+            <div className="mb-6">
+              <SectionCard
+                icon={AlertTriangle}
+                title="Últimas despesas"
+                action={
+                  <span className="text-xs text-zinc-500">
+                    {despesas.length} registros
+                  </span>
+                }
+                fullWidth
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
+                  {despesas.length === 0 ? (
+                    <p className="text-sm text-zinc-500">
+                      Sem despesas registradas
+                    </p>
+                  ) : (
+                    despesas
+                      .slice(0, 6)
+                      .map((despesa) => (
+                        <div
+                          key={despesa.id}
+                          className="p-4 bg-zinc-900/50 rounded-lg border border-zinc-800/50"
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <p className="text-sm font-medium text-white">
+                                {despesa.descricao ||
+                                  "Despesa"}
+                              </p>
+
+                              <p className="text-xs text-zinc-400">
+                                {despesa.categoria || "Sem categoria"}
+                              </p>
+
+                              <p className="text-xs text-zinc-500 mt-1">
+                                Venc: {formatarData(
+                                  despesa.dataVencimento
+                                )}
+                              </p>
+                            </div>
+
+                            <span
+                              className={`rounded-full border px-2 py-1 text-xs font-semibold ${statusColor(
+                                despesa.status ||
+                                  ""
+                              )}`}
+                            >
+                              {despesa.status ||
+                                "Sem status"}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <p className="text-lg font-bold text-red-400">
+                              {formatarMoeda(
+                                despesa.valor
+                              )}
+                            </p>
+
+                            {(despesa.status?.toLowerCase() === "atrasado" ||
+                              despesa.status?.toLowerCase() === "pendente") && (
+                              <button
+                                onClick={() =>
+                                  marcarDespesaComoPaga(despesa)
+                                }
+                                className="text-xs px-2 py-1 rounded bg-emerald-400/20 text-emerald-400 hover:bg-emerald-400/30 transition"
+                              >
+                                Marcar pago
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                  )}
+                </div>
+              </SectionCard>
+            </div>
+
             {/* STATUS DA CONEXÃO */}
 
-            <div className="mt-6">
+            <div>
               <SectionCard
                 icon={History}
                 title="Sistema"
@@ -1728,4 +1952,3 @@ export default function AdminDashboardPage() {
     </div>
   );
 }
-
