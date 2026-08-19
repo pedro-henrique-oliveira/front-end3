@@ -84,13 +84,12 @@ interface Receita {
 
 interface Despesa {
   id: number;
-  descricao?: string;
-  valor?: string | number;
-  categoria?: string;
-  dataVencimento?: string;
-  dataPagamento?: string;
+  descricao: string;
+  valor: number;
+  categoria: string;
+  dataVencimento: string;
+  dataPagamento?: string | null;
   status?: string;
-  updatedAt?: string;
   createdAt?: string;
 }
 
@@ -99,6 +98,21 @@ interface Configuracao {
   endereco: string;
   horario: string;
   capacidadeMaxima: string;
+}
+
+function categoriaColor(categoria: string) {
+  switch (categoria?.toUpperCase()) {
+    case "LUZ":
+      return "bg-amber-500/20 text-amber-300 border border-amber-500/30";
+    case "AGUA":
+      return "bg-blue-500/20 text-blue-300 border border-blue-500/30";
+    case "INTERNET":
+      return "bg-purple-500/20 text-purple-300 border border-purple-500/30";
+    case "MANUTENCAO":
+      return "bg-orange-500/20 text-orange-300 border border-orange-500/30";
+    default:
+      return "bg-zinc-800 text-zinc-300 border border-zinc-700";
+  }
 }
 
 /* =========================
@@ -152,6 +166,10 @@ function formatarMoeda(valor?: string | number) {
     currency: "BRL",
   });
 }
+
+/* =========================
+   CORREÇÃO DO TOOLTIP
+========================= */
 
 function formatarTooltip(value: unknown) {
   if (typeof value === "number" || typeof value === "string") {
@@ -412,14 +430,25 @@ export default function AdminDashboardPage() {
   const [erro, setErro] = useState("");
 
   const [searchAlunos, setSearchAlunos] = useState("");
-  const [searchFuncionarios, setSearchFuncionarios] =
-    useState("");
+  const [searchFuncionarios, setSearchFuncionarios] = useState("");
+  const [searchDespesas, setSearchDespesas] = useState("");
+  const [categoriaFilter, setCategoriaFilter] = useState("TODAS");
 
   const [filterStatus, setFilterStatus] = useState("todos");
 
   const [modalEquipe, setModalEquipe] = useState(false);
   const [modalConfig, setModalConfig] = useState(false);
   const [modalSenha, setModalSenha] = useState(false);
+  const [modalDespesa, setModalDespesa] = useState(false);
+
+  const [novaDespesa, setNovaDespesa] = useState({
+    descricao: "",
+    valor: "",
+    categoria: "LUZ",
+    dataVencimento: new Date().toISOString().split("T")[0],
+    dataPagamento: "",
+    status: "PENDENTE",
+  });
 
   const [novoFuncionario, setNovoFuncionario] = useState({
     nome: "",
@@ -448,6 +477,7 @@ export default function AdminDashboardPage() {
   ========================= */
 
   useEffect(() => {
+    // Detecta se o usuário logado é Admin ou Funcionário comum
     const funcStorage = localStorage.getItem("funcionario");
     if (funcStorage) {
       try {
@@ -510,19 +540,42 @@ export default function AdminDashboardPage() {
         return;
       }
 
-      if (!resAlunos.ok || !resFuncionarios.ok || !resReceitas.ok || !resDespesas.ok) {
-        throw new Error("Erro ao carregar dados da API");
+      if (
+        !resAlunos.ok ||
+        !resFuncionarios.ok ||
+        !resReceitas.ok ||
+        !resDespesas.ok
+      ) {
+        const respostas = [
+          ["alunos", resAlunos],
+          ["funcionarios", resFuncionarios],
+          ["receitas", resReceitas],
+          ["despesas", resDespesas],
+        ] as const;
+
+        const respostaComErro = respostas.find(([, res]) => !res.ok);
+        const nomeEndpoint = respostaComErro?.[0] || "API";
+        throw new Error(
+          `Erro ao carregar ${nomeEndpoint} (HTTP ${respostaComErro?.[1].status || "desconhecido"})`
+        );
       }
 
       const dataAlunos = await resAlunos.json();
       const dataFuncionarios = await resFuncionarios.json();
       const dataReceitas = await resReceitas.json();
-      const dataDespesas = resDespesas.ok ? await resDespesas.json() : { data: [] };
+      const dataDespesas = await resDespesas.json();
 
       setAlunos(normalizarLista<Aluno>(dataAlunos));
       setFuncionarios(normalizarLista<Funcionario>(dataFuncionarios));
       setReceitas(normalizarLista<Receita>(dataReceitas));
-      setDespesas(normalizarLista<Despesa>(dataDespesas));
+
+      const listaDespesas =
+        dataDespesas?.despesas ??
+        dataDespesas?.data ??
+        dataDespesas?.result ??
+        dataDespesas;
+
+      setDespesas(normalizarLista<Despesa>(listaDespesas));
     } catch (err) {
       setErro(
         err instanceof Error
@@ -558,12 +611,13 @@ export default function AdminDashboardPage() {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
 
+      // Gerar campos obrigatórios para o backend funcionar corretamente
       const payload = {
         nome: novoFuncionario.nome,
         cargo: novoFuncionario.cargo,
         turno: novoFuncionario.turno,
         email: `${novoFuncionario.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ".")}@gymflow.com`,
-        senha: "123456",
+        senha: "123456", // Senha padrão para novos colaboradores
         idade: 30,
         dataNascimento: "1995-01-01T00:00:00.000Z",
         cpf: `${Math.floor(100 + Math.random() * 900)}.${Math.floor(100 + Math.random() * 900)}.${Math.floor(100 + Math.random() * 900)}-${Math.floor(10 + Math.random() * 90)}`,
@@ -731,51 +785,6 @@ export default function AdminDashboardPage() {
 
       carregarDados();
     } catch (err) {
-      alert(
-        err instanceof Error
-          ? err.message
-          : "Erro ao atualizar"
-      );
-    }
-  }
-
-  /* =========================
-     DESPESAS
-  ========================= */
-
-  async function marcarDespesaComoPaga(despesa: Despesa) {
-    try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(
-        `${API_URL}/despesas/${despesa.id}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            descricao: despesa.descricao,
-            valor: despesa.valor,
-            categoria: despesa.categoria,
-            dataVencimento: despesa.dataVencimento || new Date().toISOString(),
-            dataPagamento: new Date().toISOString(),
-            status: "Pago",
-          }),
-        }
-      );
-
-      if (!res.ok) {
-        throw new Error("Erro ao atualizar despesa");
-      }
-
-      carregarDados();
-    } catch (err) {
-      alert(
-        err instanceof Error
-          ? err.message
-          : "Erro ao atualizar"
-      );
     }
   }
 
@@ -807,8 +816,25 @@ export default function AdminDashboardPage() {
     );
   }, [funcionarios, searchFuncionarios]);
 
+  const despesasFiltradas = useMemo(() => {
+    const busca = searchDespesas.trim().toLowerCase();
+
+    return despesas.filter((despesa) => {
+      const correspondeBusca =
+        !busca ||
+        despesa.descricao.toLowerCase().includes(busca) ||
+        despesa.categoria.toLowerCase().includes(busca);
+
+      const correspondeCategoria =
+        categoriaFilter === "TODAS" ||
+        despesa.categoria.toUpperCase() === categoriaFilter;
+
+      return correspondeBusca && correspondeCategoria;
+    });
+  }, [despesas, searchDespesas, categoriaFilter]);
+
   /* =========================
-     GRÁFICOS & CÁLCULOS
+     GRÁFICOS
   ========================= */
 
   const receitaPorPlano = useMemo(() => {
@@ -888,14 +914,6 @@ export default function AdminDashboardPage() {
     );
   }, [receitas]);
 
-  const totalDespesa = useMemo(() => {
-    return despesas.reduce(
-      (sum, d) =>
-        sum + numero(d.valor),
-      0
-    );
-  }, [despesas]);
-
   const receitasPendentes = useMemo(() => {
     return receitas.filter(
       (r) =>
@@ -905,45 +923,6 @@ export default function AdminDashboardPage() {
           "atrasado"
     ).length;
   }, [receitas]);
-
-  const despesasPendentes = useMemo(() => {
-    return despesas.filter(
-      (d) =>
-        d.status?.toLowerCase() ===
-          "pendente" ||
-        d.status?.toLowerCase() ===
-          "atrasado"
-    ).length;
-  }, [despesas]);
-
-  const lucroLiquido = useMemo(() => {
-    return totalReceita - totalDespesa;
-  }, [totalReceita, totalDespesa]);
-
-  const despesaPorCategoria = useMemo(() => {
-    const agrupar = despesas.reduce(
-      (acc, despesa) => {
-        const cat = despesa.categoria || "Outros";
-        const existente = acc.find(
-          (d) => d.categoria === cat
-        );
-
-        if (existente) {
-          existente.valor += numero(despesa.valor);
-        } else {
-          acc.push({
-            categoria: cat,
-            valor: numero(despesa.valor),
-          });
-        }
-
-        return acc;
-      },
-      [] as { categoria: string; valor: number }[]
-    );
-
-    return agrupar.sort((a, b) => b.valor - a.valor);
-  }, [despesas]);
 
   const taxaOcupacao = useMemo(() => {
     return configForm.capacidadeMaxima
@@ -956,6 +935,211 @@ export default function AdminDashboardPage() {
         )
       : 0;
   }, [alunos, configForm]);
+
+  /* =========================
+     DESPESAS
+  ========================= */
+
+  async function adicionarDespesa(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+
+    if (!novaDespesa.descricao.trim()) {
+      alert("Informe a descrição da despesa.");
+      return;
+    }
+
+    const valor = Number(
+      String(novaDespesa.valor).replace(",", ".")
+    );
+
+    if (!Number.isFinite(valor) || valor <= 0) {
+      alert("Informe um valor válido para a despesa.");
+      return;
+    }
+
+    if (!novaDespesa.dataVencimento) {
+      alert("Informe a data de vencimento.");
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/despesas`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          descricao: novaDespesa.descricao.trim(),
+          valor,
+          categoria: novaDespesa.categoria,
+          dataVencimento: `${novaDespesa.dataVencimento}T00:00:00.000Z`,
+          dataPagamento: novaDespesa.dataPagamento
+            ? `${novaDespesa.dataPagamento}T00:00:00.000Z`
+            : null,
+          status: novaDespesa.status,
+        }),
+      });
+
+      if (res.status === 401) {
+        localStorage.removeItem("token");
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!res.ok) {
+        let mensagem = "Erro ao cadastrar despesa.";
+
+        try {
+          const erroApi = await res.json();
+          mensagem =
+            erroApi?.error ||
+            erroApi?.message ||
+            mensagem;
+        } catch {
+          // Mantém a mensagem padrão se a API não retornar JSON.
+        }
+
+        throw new Error(mensagem);
+      }
+
+      setNovaDespesa({
+        descricao: "",
+        valor: "",
+        categoria: "LUZ",
+        dataVencimento: new Date()
+          .toISOString()
+          .split("T")[0],
+        dataPagamento: "",
+        status: "PENDENTE",
+      });
+
+      setModalDespesa(false);
+      await carregarDados();
+      alert("Despesa cadastrada com sucesso!");
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Erro ao cadastrar despesa."
+      );
+    }
+  }
+
+  async function deletarDespesa(id: number) {
+    if (!confirm("Tem certeza que deseja excluir esta despesa?")) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/despesas/${id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (res.status === 401) {
+        localStorage.removeItem("token");
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!res.ok) {
+        let mensagem = "Erro ao excluir despesa.";
+
+        try {
+          const erroApi = await res.json();
+          mensagem =
+            erroApi?.error ||
+            erroApi?.message ||
+            mensagem;
+        } catch {
+          // Mantém a mensagem padrão.
+        }
+
+        throw new Error(mensagem);
+      }
+
+      await carregarDados();
+      alert("Despesa excluída com sucesso!");
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Erro ao excluir despesa."
+      );
+    }
+  }
+
+  async function marcarDespesaComoPaga(id: number) {
+    try {
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/despesas/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          status: "PAGO",
+          dataPagamento: new Date().toISOString(),
+        }),
+      });
+
+      if (res.status === 401) {
+        localStorage.removeItem("token");
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!res.ok) {
+        let mensagem = "Erro ao marcar despesa como paga.";
+
+        try {
+          const erroApi = await res.json();
+          mensagem =
+            erroApi?.error ||
+            erroApi?.message ||
+            mensagem;
+        } catch {
+          // Mantém a mensagem padrão.
+        }
+
+        throw new Error(mensagem);
+      }
+
+      await carregarDados();
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Erro ao marcar despesa como paga."
+      );
+    }
+  }
 
   /* =========================
      RENDER
@@ -1042,15 +1226,6 @@ export default function AdminDashboardPage() {
             />
           )}
 
-          {despesasPendentes > 0 && (
-            <AlertCard
-              icon={AlertTriangle}
-              title="Despesas a pagar"
-              description={`${despesasPendentes} despesa(s) vencida(s) ou pendente(s)`}
-              type="warning"
-            />
-          )}
-
           {taxaOcupacao > 90 && (
             <AlertCard
               icon={Activity}
@@ -1075,7 +1250,7 @@ export default function AdminDashboardPage() {
 
             {/* STATS */}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
               <StatCard
                 icon={Users}
                 label="Alunos ativos"
@@ -1113,16 +1288,6 @@ export default function AdminDashboardPage() {
                 )}
                 variacao={`Pendente: ${receitasPendentes}`}
                 trend="up"
-              />
-
-              <StatCard
-                icon={AlertTriangle}
-                label="Despesa total"
-                valor={formatarMoeda(
-                  totalDespesa
-                )}
-                variacao={`Pendente: ${despesasPendentes}`}
-                trend="down"
               />
 
               <StatCard
@@ -1248,91 +1413,65 @@ export default function AdminDashboardPage() {
                 )}
               </SectionCard>
 
-              {/* DESPESAS POR CATEGORIA */}
+              {/* RESUMO */}
 
-              <SectionCard
-                icon={AlertTriangle}
-                title="Despesas por categoria"
-                fullWidth={false}
-              >
-                {despesaPorCategoria.length > 0 ? (
-                  <ResponsiveContainer
-                    width="100%"
-                    height={250}
-                  >
-                    <BarChart
-                      data={despesaPorCategoria}
-                      layout="vertical"
-                    >
-                      <XAxis type="number" stroke="#71717a" style={{ fontSize: "12px" }} />
-                      <YAxis
-                        dataKey="categoria"
-                        type="category"
-                        stroke="#71717a"
-                        style={{ fontSize: "12px" }}
-                        width={80}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "#18181b",
-                          border: "1px solid #27272a",
-                        }}
-                        formatter={(value) =>
-                          formatarTooltip(value)
-                        }
-                      />
-                      <Bar
-                        dataKey="valor"
-                        fill="#f59e0b"
-                        radius={[0, 8, 8, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <p className="text-sm text-zinc-500">
-                    Sem dados
-                  </p>
-                )}
-              </SectionCard>
-            </div>
-
-            {/* RESUMO FINANCEIRO */}
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
               <SectionCard
                 icon={CheckCircle}
-                title="Receita Total"
+                title="Resumo do mês"
                 fullWidth={false}
               >
-                <p className="text-3xl font-bold text-emerald-400">
-                  {formatarMoeda(totalReceita)}
-                </p>
-              </SectionCard>
+                <div className="space-y-3">
 
-              <SectionCard
-                icon={AlertTriangle}
-                title="Despesa Total"
-                fullWidth={false}
-              >
-                <p className="text-3xl font-bold text-red-400">
-                  {formatarMoeda(totalDespesa)}
-                </p>
-              </SectionCard>
+                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
+                    <span className="text-sm text-zinc-400">
+                      Novos alunos
+                    </span>
 
-              <SectionCard
-                icon={DollarSign}
-                title="Lucro Líquido"
-                fullWidth={false}
-              >
-                <p className={`text-3xl font-bold ${lucroLiquido >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {formatarMoeda(lucroLiquido)}
-                </p>
+                    <span className="text-lg font-bold text-emerald-400">
+                      +
+                      {Math.floor(
+                        alunos.length * 0.2
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
+                    <span className="text-sm text-zinc-400">
+                      Cancelamentos
+                    </span>
+
+                    <span className="text-lg font-bold text-red-400">
+                      -2
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
+                    <span className="text-sm text-zinc-400">
+                      Taxa conversão
+                    </span>
+
+                    <span className="text-lg font-bold text-blue-400">
+                      87%
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-lg">
+                    <span className="text-sm text-zinc-400">
+                      Satisfação
+                    </span>
+
+                    <span className="text-lg font-bold text-amber-400">
+                      4.8/5
+                    </span>
+                  </div>
+
+                </div>
               </SectionCard>
             </div>
 
             {/* TABELAS */}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
               {/* ALUNOS */}
 
@@ -1482,7 +1621,7 @@ export default function AdminDashboardPage() {
 
             {/* RECEITAS */}
 
-            <div className="mb-6">
+            <div className="mt-6">
               <SectionCard
                 icon={Wallet}
                 title="Últimas receitas"
@@ -1557,90 +1696,129 @@ export default function AdminDashboardPage() {
               </SectionCard>
             </div>
 
-            {/* DESPESAS */}
+            {/* DESPESAS & CONTAS A PAGAR */}
 
-            <div className="mb-6">
+            <div className="mt-6">
               <SectionCard
-                icon={AlertTriangle}
-                title="Últimas despesas"
+                icon={TrendingDown}
+                title="Despesas & Contas da Academia"
                 action={
-                  <span className="text-xs text-zinc-500">
-                    {despesas.length} registros
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Buscar despesa..."
+                      value={searchDespesas}
+                      onChange={(e) => setSearchDespesas(e.target.value)}
+                      className="px-3 py-1.5 text-xs rounded-lg border border-zinc-800 bg-zinc-900 text-white placeholder-zinc-600 focus:border-zinc-600 outline-none"
+                    />
+
+                    <select
+                      value={categoriaFilter}
+                      onChange={(e) => setCategoriaFilter(e.target.value)}
+                      className="px-3 py-1.5 text-xs rounded-lg border border-zinc-800 bg-zinc-900 text-white focus:border-zinc-600 outline-none"
+                    >
+                      <option value="TODAS">Todas Categorias</option>
+                      <option value="LUZ">Luz / Energia</option>
+                      <option value="AGUA">Água e Esgoto</option>
+                      <option value="INTERNET">Internet</option>
+                      <option value="MANUTENCAO">Manutenção</option>
+                      <option value="OUTROS">Outros</option>
+                    </select>
+
+                    {isAdm && (
+                      <button
+                        onClick={() => setModalDespesa(true)}
+                        className="flex items-center gap-1.5 rounded-lg bg-yellow-400 px-3 py-1.5 text-xs font-bold text-black hover:bg-yellow-300 transition"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Nova Despesa
+                      </button>
+                    )}
+                  </div>
                 }
                 fullWidth
               >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
-                  {despesas.length === 0 ? (
-                    <p className="text-sm text-zinc-500">
-                      Sem despesas registradas
-                    </p>
-                  ) : (
-                    despesas
-                      .slice(0, 6)
-                      .map((despesa) => (
-                        <div
-                          key={despesa.id}
-                          className="p-4 bg-zinc-900/50 rounded-lg border border-zinc-800/50"
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <div>
-                              <p className="text-sm font-medium text-white">
-                                {despesa.descricao ||
-                                  "Despesa"}
-                              </p>
-
-                              <p className="text-xs text-zinc-400">
-                                {despesa.categoria || "Sem categoria"}
-                              </p>
-
-                              <p className="text-xs text-zinc-500 mt-1">
-                                Venc: {formatarData(
-                                  despesa.dataVencimento
-                                )}
-                              </p>
-                            </div>
-
-                            <span
-                              className={`rounded-full border px-2 py-1 text-xs font-semibold ${statusColor(
-                                despesa.status ||
-                                  ""
-                              )}`}
-                            >
-                              {despesa.status ||
-                                "Sem status"}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-between">
-                            <p className="text-lg font-bold text-red-400">
-                              {formatarMoeda(
-                                despesa.valor
-                              )}
-                            </p>
-
-                            {(despesa.status?.toLowerCase() === "atrasado" ||
-                              despesa.status?.toLowerCase() === "pendente") && (
-                              <button
-                                onClick={() =>
-                                  marcarDespesaComoPaga(despesa)
-                                }
-                                className="text-xs px-2 py-1 rounded bg-emerald-400/20 text-emerald-400 hover:bg-emerald-400/30 transition"
+                <div className="overflow-x-auto rounded-lg border border-zinc-800/80 bg-zinc-950">
+                  <table className="w-full text-left text-xs text-zinc-300">
+                    <thead className="bg-zinc-900/90 uppercase text-[11px] font-semibold text-zinc-400 border-b border-zinc-800">
+                      <tr>
+                        <th className="px-4 py-3">id</th>
+                        <th className="px-4 py-3">descricao</th>
+                        <th className="px-4 py-3">valor</th>
+                        <th className="px-4 py-3">categoria</th>
+                        <th className="px-4 py-3">dataVencimento</th>
+                        <th className="px-4 py-3">dataPagamento</th>
+                        <th className="px-4 py-3">status</th>
+                        {isAdm && <th className="px-4 py-3 text-right">ações</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-900 font-mono">
+                      {despesasFiltradas.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-4 py-6 text-center text-zinc-500 font-sans">
+                            Nenhuma despesa registrada.
+                          </td>
+                        </tr>
+                      ) : (
+                        despesasFiltradas.map((despesa) => (
+                          <tr key={despesa.id} className="hover:bg-zinc-900/40 transition">
+                            <td className="px-4 py-3 font-semibold text-white">{despesa.id}</td>
+                            <td className="px-4 py-3 font-sans font-medium text-white">{despesa.descricao}</td>
+                            <td className="px-4 py-3 font-bold text-yellow-400">
+                              {formatarMoeda(despesa.valor)}
+                            </td>
+                            <td className="px-4 py-3 font-sans">
+                              <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold tracking-wider ${categoriaColor(despesa.categoria)}`}>
+                                {despesa.categoria}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-zinc-400">
+                              {formatarData(despesa.dataVencimento)}
+                            </td>
+                            <td className="px-4 py-3 text-zinc-400">
+                              {despesa.dataPagamento ? formatarData(despesa.dataPagamento) : "-"}
+                            </td>
+                            <td className="px-4 py-3 font-sans">
+                              <span
+                                className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${statusColor(
+                                  despesa.status || (despesa.dataPagamento ? "pago" : "pendente")
+                                )}`}
                               >
-                                Marcar pago
-                              </button>
+                                {despesa.status || (despesa.dataPagamento ? "PAGO" : "PENDENTE")}
+                              </span>
+                            </td>
+                            {isAdm && (
+                              <td className="px-4 py-3 text-right font-sans">
+                                <div className="flex items-center justify-end gap-2">
+                                  {!despesa.dataPagamento && despesa.status?.toUpperCase() !== "PAGO" && (
+                                    <button
+                                      onClick={() => marcarDespesaComoPaga(despesa.id)}
+                                      className="px-2 py-1 rounded bg-emerald-400/20 text-emerald-400 text-xs hover:bg-emerald-400/30 transition font-semibold"
+                                    >
+                                      Pagar
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => deletarDespesa(despesa.id)}
+                                    className="px-2 py-1 rounded text-xs text-red-400 hover:bg-red-400/10 transition"
+                                  >
+                                    Excluir
+                                  </button>
+                                </div>
+                              </td>
                             )}
-                          </div>
-                        </div>
-                      ))
-                  )}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </SectionCard>
             </div>
 
             {/* STATUS DA CONEXÃO */}
 
-            <div>
+            <div className="mt-6">
               <SectionCard
                 icon={History}
                 title="Sistema"
@@ -1949,6 +2127,103 @@ export default function AdminDashboardPage() {
           </button>
         </form>
       </Modal>
+
+      {/* =========================
+          MODAL DESPESA
+      ========================= */}
+
+      <Modal
+        open={modalDespesa}
+        onClose={() => setModalDespesa(false)}
+        title="Cadastrar Nova Despesa"
+      >
+        <form onSubmit={adicionarDespesa} className="flex flex-col gap-4">
+          <Field
+            label="Descrição da Despesa"
+            value={novaDespesa.descricao}
+            onChange={(e) =>
+              setNovaDespesa((prev) => ({ ...prev, descricao: e.target.value }))
+            }
+            placeholder="Ex: Conta de Energia Elétrica"
+            required
+          />
+
+          <Field
+            label="Valor (R$)"
+            type="number"
+            step="0.01"
+            value={novaDespesa.valor}
+            onChange={(e) =>
+              setNovaDespesa((prev) => ({ ...prev, valor: e.target.value }))
+            }
+            placeholder="Ex: 850.00"
+            required
+          />
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs uppercase tracking-wide text-zinc-500 font-semibold">
+              Categoria
+            </span>
+            <select
+              value={novaDespesa.categoria}
+              onChange={(e) =>
+                setNovaDespesa((prev) => ({ ...prev, categoria: e.target.value }))
+              }
+              className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+            >
+              <option value="LUZ">Luz / Energia</option>
+              <option value="AGUA">Água e Esgoto</option>
+              <option value="INTERNET">Internet / Telecom</option>
+              <option value="MANUTENCAO">Manutenção</option>
+              <option value="OUTROS">Outros</option>
+            </select>
+          </label>
+
+          <Field
+            label="Data de Vencimento"
+            type="date"
+            value={novaDespesa.dataVencimento}
+            onChange={(e) =>
+              setNovaDespesa((prev) => ({ ...prev, dataVencimento: e.target.value }))
+            }
+            required
+          />
+
+          <Field
+            label="Data de Pagamento (opcional)"
+            type="date"
+            value={novaDespesa.dataPagamento}
+            onChange={(e) =>
+              setNovaDespesa((prev) => ({ ...prev, dataPagamento: e.target.value }))
+            }
+          />
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs uppercase tracking-wide text-zinc-500 font-semibold">
+              Status do Pagamento
+            </span>
+            <select
+              value={novaDespesa.status}
+              onChange={(e) =>
+                setNovaDespesa((prev) => ({ ...prev, status: e.target.value }))
+              }
+              className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+            >
+              <option value="PENDENTE">Pendente</option>
+              <option value="PAGO">Pago</option>
+              <option value="ATRASADO">Atrasado</option>
+            </select>
+          </label>
+
+          <button
+            type="submit"
+            className="mt-2 w-full rounded-lg bg-yellow-400 py-3 text-sm font-bold text-black transition-colors hover:bg-yellow-300"
+          >
+            Cadastrar Despesa
+          </button>
+        </form>
+      </Modal>
     </div>
   );
 }
+
