@@ -1,7 +1,7 @@
 import axios from "axios";
 
 export const api = axios.create({
-  baseURL: "http://localhost:3333",
+  baseURL: "https://tcc-back-end.vercel.app",
   headers: {
     "Content-Type": "application/json",
   },
